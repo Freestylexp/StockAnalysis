@@ -1,0 +1,24 @@
+{
+  "holdings": [
+    {
+      "code": "000789",
+      "name": "万年青",
+      "shares": 4000.0,
+      "cost_price": 5.94,
+      "notes": ""
+    },
+    {
+      "code": "000652",
+      "name": "泰达股份",
+      "shares": 100.0,
+      "cost_price": 3.865,
+      "notes": ""
+    }
+  ],
+  "watchlist": [],
+  "settings": {
+    "market": "cn",
+    "report_dir": "reports",
+    "max_new_recommendations": 5
+  }
+}
