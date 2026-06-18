@@ -5,3 +5,4 @@ venv/
 .env
 reports/*.md
 !reports/.gitkeep
+data/history_cache/

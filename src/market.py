@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta
 from typing import Any
@@ -17,14 +18,68 @@ def _sina_symbol(code: str) -> str:
     return f"{prefix}{code}"
 
 
+def _http_get(url: str, params: dict | None = None, encoding: str = "utf-8") -> requests.Response:
+    session = requests.Session()
+    session.trust_env = False  # 避免本地代理导致连接失败
+    resp = session.get(
+        url, params=params,
+        headers={"Referer": "https://finance.sina.com.cn", "User-Agent": "Mozilla/5.0"},
+        timeout=20,
+    )
+    resp.encoding = encoding
+    return resp
+
+
+def _fetch_sina_history(code: str, days: int = 120) -> pd.DataFrame:
+    """Fallback: daily K-line from Sina."""
+    symbol = _sina_symbol(code)
+    try:
+        resp = _http_get(
+            "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
+            params={"symbol": symbol, "scale": "240", "ma": "no", "datalen": str(min(days + 10, 1023))},
+        )
+        data = json.loads(resp.text)
+        if not data:
+            return pd.DataFrame()
+        rows = []
+        for item in data:
+            rows.append({
+                "日期": item.get("day", ""),
+                "开盘": float(item.get("open", 0)),
+                "最高": float(item.get("high", 0)),
+                "最低": float(item.get("low", 0)),
+                "收盘": float(item.get("close", 0)),
+                "成交量": float(item.get("volume", 0)),
+            })
+        df = pd.DataFrame(rows)
+        df["日期"] = pd.to_datetime(df["日期"])
+        return df.tail(days).copy()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _fetch_tencent_history(code: str, days: int = 120) -> pd.DataFrame:
+    """Fallback: daily K-line via akshare Tencent source."""
+    try:
+        df = ak.stock_zh_a_hist_tx(
+            symbol=_sina_symbol(code),
+            start_date=(datetime.now() - timedelta(days=days + 60)).strftime("%Y%m%d"),
+            end_date=datetime.now().strftime("%Y%m%d"),
+            adjust="qfq",
+        )
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = df.rename(columns={"date": "日期", "open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "amount": "成交量"})
+        return df.tail(days).copy()
+    except Exception:
+        return pd.DataFrame()
+
+
 def _fetch_sina_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     """Fallback: fetch quotes from Sina Finance API."""
     symbols = [_sina_symbol(c) for c in codes]
-    url = f"https://hq.sinajs.cn/list={','.join(symbols)}"
-    session = requests.Session()
-    session.trust_env = False
-    resp = session.get(url, headers={"Referer": "https://finance.sina.com.cn"}, timeout=15)
-    resp.encoding = "gbk"
+    url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
+    resp = _http_get(url, encoding="gbk")
 
     result: dict[str, dict[str, Any]] = {}
     for line in resp.text.strip().split("\n"):
@@ -85,68 +140,101 @@ def fetch_realtime_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
         return {}
 
     normalized = [normalize_code(c) for c in codes]
-    try:
-        df = ak.stock_zh_a_spot_em()
-    except Exception:
-        try:
-            sina = _fetch_sina_quotes(normalized)
-            if sina:
-                return {c: sina[c] for c in normalized if c in sina}
-        except Exception:
-            pass
-        raise RuntimeError("获取行情失败，请检查网络连接")
-
-    df["代码"] = df["代码"].astype(str).str.zfill(6)
     result: dict[str, dict[str, Any]] = {}
 
-    for code in normalized:
-        row = df[df["代码"] == code]
-        if row.empty:
-            continue
-        r = row.iloc[0]
-        result[code] = {
-            "code": code,
-            "name": str(r.get("名称", "")),
-            "price": float(r.get("最新价", 0) or 0),
-            "change_pct": float(r.get("涨跌幅", 0) or 0),
-            "change_amount": float(r.get("涨跌额", 0) or 0),
-            "volume": float(r.get("成交量", 0) or 0),
-            "turnover": float(r.get("成交额", 0) or 0),
-            "high": float(r.get("最高", 0) or 0),
-            "low": float(r.get("最低", 0) or 0),
-            "open": float(r.get("今开", 0) or 0),
-            "prev_close": float(r.get("昨收", 0) or 0),
-            "turnover_rate": float(r.get("换手率", 0) or 0),
-            "pe": float(r.get("市盈率-动态", 0) or 0) if pd.notna(r.get("市盈率-动态")) else None,
-            "pb": float(r.get("市净率", 0) or 0) if pd.notna(r.get("市净率")) else None,
-            "market_cap": float(r.get("总市值", 0) or 0) if pd.notna(r.get("总市值")) else None,
-        }
-    return result
+    # 1) 东方财富
+    try:
+        df = ak.stock_zh_a_spot_em()
+        df["代码"] = df["代码"].astype(str).str.zfill(6)
+        for code in normalized:
+            row = df[df["代码"] == code]
+            if row.empty:
+                continue
+            r = row.iloc[0]
+            result[code] = {
+                "code": code,
+                "name": str(r.get("名称", "")),
+                "price": float(r.get("最新价", 0) or 0),
+                "change_pct": float(r.get("涨跌幅", 0) or 0),
+                "change_amount": float(r.get("涨跌额", 0) or 0),
+                "volume": float(r.get("成交量", 0) or 0),
+                "turnover": float(r.get("成交额", 0) or 0),
+                "high": float(r.get("最高", 0) or 0),
+                "low": float(r.get("最低", 0) or 0),
+                "open": float(r.get("今开", 0) or 0),
+                "prev_close": float(r.get("昨收", 0) or 0),
+                "turnover_rate": float(r.get("换手率", 0) or 0),
+                "pe": float(r.get("市盈率-动态", 0) or 0) if pd.notna(r.get("市盈率-动态")) else None,
+                "pb": float(r.get("市净率", 0) or 0) if pd.notna(r.get("市净率")) else None,
+                "market_cap": float(r.get("总市值", 0) or 0) if pd.notna(r.get("总市值")) else None,
+            }
+        if result:
+            return {c: result[c] for c in normalized if c in result}
+    except Exception:
+        pass
+
+    # 2) 新浪财经
+    try:
+        sina = _fetch_sina_quotes(normalized)
+        if sina:
+            return {c: sina[c] for c in normalized if c in sina}
+    except Exception:
+        pass
+
+    return result  # 空 dict，不抛异常
+
+
+def _load_stale_history_cache(code: str, days: int) -> pd.DataFrame:
+    from .storage import HISTORY_CACHE_DIR
+    path = HISTORY_CACHE_DIR / f"{normalize_code(code)}.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path, parse_dates=["日期"])
+        return df.tail(days).copy()
+    except Exception:
+        return pd.DataFrame()
 
 
 def fetch_history(code: str, days: int = 120) -> pd.DataFrame:
-    """Fetch daily OHLCV history."""
+    """Fetch daily OHLCV history with multiple fallbacks + local cache."""
+    from .storage import load_history_cache, save_history_cache
+
     code = normalize_code(code)
+    cached = load_history_cache(code, days)
+    if cached is not None and not cached.empty:
+        return cached
+
     end = datetime.now().strftime("%Y%m%d")
     start = (datetime.now() - timedelta(days=days + 30)).strftime("%Y%m%d")
+    df = pd.DataFrame()
 
     try:
         df = ak.stock_zh_a_hist(
-            symbol=code,
-            period="daily",
-            start_date=start,
-            end_date=end,
-            adjust="qfq",
+            symbol=code, period="daily",
+            start_date=start, end_date=end, adjust="qfq",
         )
     except Exception:
         df = pd.DataFrame()
 
     if df is None or df.empty:
-        return pd.DataFrame()
+        df = _fetch_tencent_history(code, days)
+    if df is None or df.empty:
+        df = _fetch_sina_history(code, days)
+
+    if df is None or df.empty:
+        stale = _load_stale_history_cache(code, days)
+        return stale if stale is not None else pd.DataFrame()
+
+    for col in ("开盘", "最高", "最低", "收盘", "成交量"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
     df = df.tail(days).copy()
-    df["收盘"] = pd.to_numeric(df["收盘"], errors="coerce")
-    df["成交量"] = pd.to_numeric(df["成交量"], errors="coerce")
+    try:
+        save_history_cache(code, df)
+    except Exception:
+        pass
     return df
 
 
@@ -190,6 +278,70 @@ def compute_indicators(df: pd.DataFrame) -> dict[str, Any]:
         "change_5d": float((close.iloc[-1] / close.iloc[-6] - 1) * 100) if len(close) >= 6 else 0,
         "change_20d": float((close.iloc[-1] / close.iloc[-21] - 1) * 100) if len(close) >= 21 else 0,
     }
+
+
+def fetch_stock_list() -> list[dict[str, str]]:
+    """Load all A-share codes and names for search/autocomplete."""
+    from .storage import load_stocks_cache, save_stocks_cache
+
+    try:
+        df = ak.stock_zh_a_spot_em()
+    except Exception:
+        return load_stocks_cache()
+
+    df = df.copy()
+    df["代码"] = df["代码"].astype(str).str.zfill(6)
+    stocks = []
+    for _, r in df.iterrows():
+        name = str(r.get("名称", "")).strip()
+        code = str(r["代码"])
+        if name and code:
+            stocks.append({"code": code, "name": name})
+
+    if stocks:
+        try:
+            save_stocks_cache(stocks)
+        except Exception:
+            pass
+    return stocks or load_stocks_cache()
+
+
+def search_stocks(keyword: str, stock_list: list[dict[str, str]] | None = None, limit: int = 20) -> list[dict[str, str]]:
+    """Search stocks by code or name (supports partial Chinese name)."""
+    keyword = keyword.strip()
+    if not keyword:
+        return []
+
+    if stock_list is None:
+        stock_list = fetch_stock_list()
+    if not stock_list:
+        return []
+
+    kw = keyword.upper()
+    exact_code: list[dict[str, str]] = []
+    code_prefix: list[dict[str, str]] = []
+    name_match: list[dict[str, str]] = []
+
+    for s in stock_list:
+        code = s["code"]
+        name = s["name"]
+        if code == kw or kw == normalize_code(keyword):
+            exact_code.append(s)
+        elif code.startswith(kw) or kw in code:
+            code_prefix.append(s)
+        elif keyword in name:
+            name_match.append(s)
+
+    seen: set[str] = set()
+    results: list[dict[str, str]] = []
+    for group in (exact_code, code_prefix, name_match):
+        for s in group:
+            if s["code"] not in seen:
+                seen.add(s["code"])
+                results.append(s)
+            if len(results) >= limit:
+                return results
+    return results
 
 
 def discover_hot_stocks(limit: int = 10) -> list[dict[str, Any]]:

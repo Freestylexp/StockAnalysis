@@ -10,12 +10,19 @@
     {
       "code": "000652",
       "name": "泰达股份",
-      "shares": 100.0,
+      "shares": 1000.0,
       "cost_price": 3.865,
       "notes": ""
     }
   ],
-  "watchlist": [],
+  "watchlist": [
+    {
+      "code": "300724",
+      "name": "捷佳伟创",
+      "notes": "",
+      "added_at": "2026-06-17"
+    }
+  ],
   "settings": {
     "market": "cn",
     "report_dir": "reports",
