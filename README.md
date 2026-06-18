@@ -3,9 +3,8 @@ title: A股持仓分析
 emoji: 📈
 colorFrom: blue
 colorTo: green
-sdk: streamlit
-sdk_version: 1.32.0
-app_file: app.py
+sdk: docker
+app_port: 8501
 pinned: false
 ---
 
@@ -70,12 +69,11 @@ git push -u origin main
 
 ### 2. 创建 Space
 
-1. 打开 [huggingface.co/new-space](https://huggingface.co/new-space)
+1. 打开 [huggingface.co/new-space?sdk=docker](https://huggingface.co/new-space?sdk=docker)
 2. **Space name**：`stock-portfolio-agent`（可自定）
-3. **License**：MIT
-4. **SDK**：Streamlit
-5. **Hardware**：CPU basic（免费）
-6. **Visibility**：Private（仅自己可见，推荐）或 Public
+3. **SDK**：**Docker**（Hugging Face 已不再支持直接选 Streamlit）
+4. **Hardware**：CPU basic（免费）
+5. **Visibility**：Private（仅自己可见，推荐）
 
 ### 3. 连接 GitHub 仓库
 

@@ -1,0 +1,9 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.deploy_key
+reports/*.md
+data/history_cache/
+.env
