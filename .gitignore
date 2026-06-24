@@ -1,4 +1,5 @@
 .deploy_key
+.github_known_hosts
 __pycache__/
 *.pyc
 .venv/
