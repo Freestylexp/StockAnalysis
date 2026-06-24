@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate daily digest and push to WeChat via PushPlus."""
+"""Generate daily report and send by email."""
 
 from __future__ import annotations
 
@@ -13,9 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import requests
-
-from src.analyze import analyze_stock
+from src.analyze import analyze_stock, generate_report
+from src.email_notify import send_report_email
 from src.portfolio_pnl import compute_portfolio_pnl_summary
 from src.recommend import discover_buy_candidates
 from src.storage import load_portfolio, save_report
@@ -25,24 +24,14 @@ def _esc(text: str) -> str:
     return html.escape(str(text))
 
 
-def _check_token() -> str:
-    token = os.getenv("PUSHPLUS_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError(
-            "未设置 PUSHPLUS_TOKEN。"
-            "请在 GitHub → Settings → Secrets → Actions 中添加 PUSHPLUS_TOKEN"
-        )
-    return token
-
-
 def build_digest_html() -> tuple[str, str]:
-    """Return title and html body for WeChat push."""
     portfolio = load_portfolio()
     today = datetime.now().strftime("%Y-%m-%d")
     title = f"A股每日报告 {today}"
 
     lines: list[str] = [
-        f"<h3>📈 A股持仓分析 · {today}</h3>",
+        "<div style='font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.6;'>",
+        f"<h2>📈 A股持仓分析 · {today}</h2>",
     ]
 
     app_url = os.getenv("APP_URL", "").strip()
@@ -55,7 +44,7 @@ def build_digest_html() -> tuple[str, str]:
             ch1 = summary.get("changes", {}).get(1, {}).get("pnl_delta", 0)
             ch5 = summary.get("changes", {}).get(5, {}).get("pnl_delta", 0)
             lines += [
-                "<p><b>组合概览</b></p>",
+                "<h3>组合概览</h3>",
                 "<ul>",
                 f"<li>市值：¥{summary['total_market_value']:,.0f}</li>",
                 f"<li>总浮动盈亏：¥{summary['total_pnl']:+,.0f}（{summary['total_pnl_pct']:+.2f}%）</li>",
@@ -66,7 +55,7 @@ def build_digest_html() -> tuple[str, str]:
         except Exception as exc:
             lines.append(f"<p><b>组合概览暂不可用：</b>{_esc(exc)}</p>")
 
-        lines += ["<p><b>持仓速览</b></p>", "<ul>"]
+        lines += ["<h3>持仓速览</h3>", "<ul>"]
         for h in portfolio.holdings:
             try:
                 r = analyze_stock(h.code, h.name, holding=True, cost_price=h.cost_price, shares=h.shares)
@@ -92,7 +81,7 @@ def build_digest_html() -> tuple[str, str]:
     except Exception as exc:
         candidates, meta = [], {"message": f"扫描失败：{exc}"}
 
-    lines.append("<p><b>今日买入参考</b></p>")
+    lines.append("<h3>今日买入参考</h3>")
     if candidates:
         lines.append("<ul>")
         for c in candidates[:5]:
@@ -109,58 +98,31 @@ def build_digest_html() -> tuple[str, str]:
         msg = meta.get("message") or "暂无高评分买入推荐"
         lines.append(f"<p>{_esc(msg)}</p>")
 
-    lines.append("<p><i>仅供参考，不构成投资建议。</i></p>")
+    lines.append("<p style='color:#666;'><i>仅供参考，不构成投资建议。</i></p></div>")
     return title, "\n".join(lines)
 
 
-def push_to_wechat(title: str, content: str, token: str) -> dict:
-    payload: dict = {
-        "token": token,
-        "title": title[:100],
-        "content": content,
-        "template": "html",
-    }
-    topic = os.getenv("PUSHPLUS_TOPIC", "").strip()
-    if topic:
-        payload["topic"] = topic
-
-    resp = requests.post(
-        "https://www.pushplus.plus/send",
-        json=payload,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    try:
-        data = resp.json()
-    except Exception as exc:
-        raise RuntimeError(f"PushPlus 响应解析失败：{resp.text[:200]}") from exc
-
-    code = data.get("code")
-    if str(code) != "200":
-        raise RuntimeError(f"PushPlus 返回错误：{data.get('msg', data)}")
-    return data
-
-
 def main() -> int:
-    print("→ 检查 PushPlus Token ...")
-    token = _check_token()
+    print("→ 检查 SMTP 配置 ...")
+    from src.email_notify import get_smtp_config
 
-    print("→ 生成每日报告摘要 ...")
+    cfg = get_smtp_config()
+    print(f"→ 发件：{cfg['from']}  收件：{cfg['to']}  服务器：{cfg['host']}:{cfg['port']}")
+
+    print("→ 生成每日报告 ...")
     title, digest_html = build_digest_html()
 
-    print("→ 尝试保存完整 Markdown 报告 ...")
+    full_report = ""
     try:
-        from src.analyze import generate_report
-
         full_report = generate_report(load_portfolio())
         report_path = save_report(full_report, ROOT / "reports")
         print(f"→ 完整报告已保存：{report_path}")
     except Exception as exc:
-        print(f"⚠️ 完整报告保存跳过：{exc}")
+        print(f"⚠️ 完整 Markdown 报告生成失败，仍发送 HTML 摘要：{exc}")
 
-    print("→ 推送到微信（PushPlus）...")
-    result = push_to_wechat(title, digest_html, token)
-    print(f"✅ 推送成功：{result.get('msg', 'ok')}")
+    print("→ 发送邮件 ...")
+    send_report_email(title, digest_html, markdown_body=full_report or None)
+    print("✅ 邮件发送成功")
     return 0
 
 

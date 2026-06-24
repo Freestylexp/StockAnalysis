@@ -1,4 +1,4 @@
-name: Daily WeChat Report
+name: Daily Email Report
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  push-report:
+  email-report:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -24,20 +24,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Validate PushPlus token
+      - name: Validate email secrets
         env:
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
-          if [ -z "$PUSHPLUS_TOKEN" ]; then
-            echo "::error::未配置 PUSHPLUS_TOKEN。请到 Settings → Secrets and variables → Actions 添加。"
+          if [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASSWORD" ]; then
+            echo "::error::请配置 SMTP_USER 和 SMTP_PASSWORD（QQ 邮箱授权码）"
             exit 1
           fi
-          echo "PUSHPLUS_TOKEN 已配置"
+          echo "SMTP 配置已就绪"
 
-      - name: Generate and push daily report
+      - name: Generate and email daily report
         env:
-          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
-          PUSHPLUS_TOPIC: ${{ secrets.PUSHPLUS_TOPIC }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
           APP_URL: ${{ secrets.APP_URL }}
           TZ: Asia/Shanghai
         run: python -u scripts/daily_push.py
