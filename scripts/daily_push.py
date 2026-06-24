@@ -13,11 +13,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.analyze import analyze_stock, generate_report
+from src.analyze import analyze_stock, generate_report, save_report
 from src.email_notify import send_report_email
 from src.portfolio_pnl import compute_portfolio_pnl_summary
 from src.recommend import discover_buy_candidates
-from src.storage import load_portfolio, save_report
+from src.storage import load_portfolio
 
 
 def _esc(text: str) -> str:
@@ -70,6 +70,27 @@ def build_digest_html() -> tuple[str, str]:
         lines.append("</ul>")
     else:
         lines.append("<p>当前暂无持仓。</p>")
+
+    if portfolio.watchlist:
+        lines += ["<h3>关注股动向</h3>", "<ul>"]
+        for w in portfolio.watchlist:
+            try:
+                r = analyze_stock(w.code, w.name, holding=False)
+                q = r.get("quote", {})
+                ind = r.get("indicators", {})
+                price = q.get("price") or ind.get("price") or 0
+                chg = q.get("change_pct", 0)
+                ch5 = ind.get("change_5d", 0)
+                ch20 = ind.get("change_20d", 0)
+                lines.append(
+                    f"<li><b>{_esc(w.name)}</b>（{w.code}）"
+                    f" · ¥{price:.2f} · 今日 {chg:+.2f}%"
+                    f" · 5日 {ch5:+.1f}% · 20日 {ch20:+.1f}%"
+                    f" · {_esc(r['action'])}</li>"
+                )
+            except Exception as exc:
+                lines.append(f"<li>{_esc(w.name)}（{w.code}）· 分析暂不可用：{_esc(exc)}</li>")
+        lines.append("</ul>")
 
     exclude = {h.code for h in portfolio.holdings} | {w.code for w in portfolio.watchlist}
     try:
