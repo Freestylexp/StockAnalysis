@@ -6,6 +6,7 @@ from __future__ import annotations
 import html
 import os
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -14,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 import requests
 
-from src.analyze import analyze_stock, generate_report
+from src.analyze import analyze_stock
 from src.portfolio_pnl import compute_portfolio_pnl_summary
 from src.recommend import discover_buy_candidates
 from src.storage import load_portfolio, save_report
@@ -24,8 +25,18 @@ def _esc(text: str) -> str:
     return html.escape(str(text))
 
 
-def build_digest_html() -> tuple[str, str, str]:
-    """Return title, html body, and full markdown report."""
+def _check_token() -> str:
+    token = os.getenv("PUSHPLUS_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError(
+            "未设置 PUSHPLUS_TOKEN。"
+            "请在 GitHub → Settings → Secrets → Actions 中添加 PUSHPLUS_TOKEN"
+        )
+    return token
+
+
+def build_digest_html() -> tuple[str, str]:
+    """Return title and html body for WeChat push."""
     portfolio = load_portfolio()
     today = datetime.now().strftime("%Y-%m-%d")
     title = f"A股每日报告 {today}"
@@ -39,20 +50,23 @@ def build_digest_html() -> tuple[str, str, str]:
         lines.append(f'<p><a href="{_esc(app_url)}">打开完整网页</a></p>')
 
     if portfolio.holdings:
-        summary = compute_portfolio_pnl_summary(portfolio)
-        ch1 = summary.get("changes", {}).get(1, {}).get("pnl_delta", 0)
-        ch5 = summary.get("changes", {}).get(5, {}).get("pnl_delta", 0)
-        lines += [
-            "<p><b>组合概览</b></p>",
-            "<ul>",
-            f"<li>市值：¥{summary['total_market_value']:,.0f}</li>",
-            f"<li>总浮动盈亏：¥{summary['total_pnl']:+,.0f}（{summary['total_pnl_pct']:+.2f}%）</li>",
-            f"<li>近1日变化：¥{ch1:+,.0f}</li>",
-            f"<li>近5日变化：¥{ch5:+,.0f}</li>",
-            "</ul>",
-            "<p><b>持仓速览</b></p>",
-            "<ul>",
-        ]
+        try:
+            summary = compute_portfolio_pnl_summary(portfolio)
+            ch1 = summary.get("changes", {}).get(1, {}).get("pnl_delta", 0)
+            ch5 = summary.get("changes", {}).get(5, {}).get("pnl_delta", 0)
+            lines += [
+                "<p><b>组合概览</b></p>",
+                "<ul>",
+                f"<li>市值：¥{summary['total_market_value']:,.0f}</li>",
+                f"<li>总浮动盈亏：¥{summary['total_pnl']:+,.0f}（{summary['total_pnl_pct']:+.2f}%）</li>",
+                f"<li>近1日变化：¥{ch1:+,.0f}</li>",
+                f"<li>近5日变化：¥{ch5:+,.0f}</li>",
+                "</ul>",
+            ]
+        except Exception as exc:
+            lines.append(f"<p><b>组合概览暂不可用：</b>{_esc(exc)}</p>")
+
+        lines += ["<p><b>持仓速览</b></p>", "<ul>"]
         for h in portfolio.holdings:
             try:
                 r = analyze_stock(h.code, h.name, holding=True, cost_price=h.cost_price, shares=h.shares)
@@ -69,11 +83,15 @@ def build_digest_html() -> tuple[str, str, str]:
         lines.append("<p>当前暂无持仓。</p>")
 
     exclude = {h.code for h in portfolio.holdings} | {w.code for w in portfolio.watchlist}
-    candidates, meta = discover_buy_candidates(
-        exclude_codes=exclude,
-        limit=portfolio.settings.get("max_new_recommendations", 5),
-        scan_limit=40,
-    )
+    try:
+        candidates, meta = discover_buy_candidates(
+            exclude_codes=exclude,
+            limit=portfolio.settings.get("max_new_recommendations", 5),
+            scan_limit=20,
+        )
+    except Exception as exc:
+        candidates, meta = [], {"message": f"扫描失败：{exc}"}
+
     lines.append("<p><b>今日买入参考</b></p>")
     if candidates:
         lines.append("<ul>")
@@ -92,20 +110,13 @@ def build_digest_html() -> tuple[str, str, str]:
         lines.append(f"<p>{_esc(msg)}</p>")
 
     lines.append("<p><i>仅供参考，不构成投资建议。</i></p>")
-    digest_html = "\n".join(lines)
-
-    full_report = generate_report(portfolio)
-    return title, digest_html, full_report
+    return title, "\n".join(lines)
 
 
-def push_to_wechat(title: str, content: str) -> dict:
-    token = os.getenv("PUSHPLUS_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("未设置 PUSHPLUS_TOKEN")
-
+def push_to_wechat(title: str, content: str, token: str) -> dict:
     payload: dict = {
         "token": token,
-        "title": title,
+        "title": title[:100],
         "content": content,
         "template": "html",
     }
@@ -119,21 +130,36 @@ def push_to_wechat(title: str, content: str) -> dict:
         timeout=30,
     )
     resp.raise_for_status()
-    data = resp.json()
-    if data.get("code") != 200:
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise RuntimeError(f"PushPlus 响应解析失败：{resp.text[:200]}") from exc
+
+    code = data.get("code")
+    if str(code) != "200":
         raise RuntimeError(f"PushPlus 返回错误：{data.get('msg', data)}")
     return data
 
 
 def main() -> int:
-    print("→ 生成每日报告摘要...")
-    title, digest_html, full_report = build_digest_html()
+    print("→ 检查 PushPlus Token ...")
+    token = _check_token()
 
-    report_path = save_report(full_report, ROOT / "reports")
-    print(f"→ 完整报告已保存：{report_path}")
+    print("→ 生成每日报告摘要 ...")
+    title, digest_html = build_digest_html()
+
+    print("→ 尝试保存完整 Markdown 报告 ...")
+    try:
+        from src.analyze import generate_report
+
+        full_report = generate_report(load_portfolio())
+        report_path = save_report(full_report, ROOT / "reports")
+        print(f"→ 完整报告已保存：{report_path}")
+    except Exception as exc:
+        print(f"⚠️ 完整报告保存跳过：{exc}")
 
     print("→ 推送到微信（PushPlus）...")
-    result = push_to_wechat(title, digest_html)
+    result = push_to_wechat(title, digest_html, token)
     print(f"✅ 推送成功：{result.get('msg', 'ok')}")
     return 0
 
@@ -143,4 +169,5 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as exc:
         print(f"❌ 失败：{exc}", file=sys.stderr)
+        traceback.print_exc()
         raise SystemExit(1)
