@@ -109,6 +109,12 @@ python main.py list
 python main.py analyze --save
 ```
 
+## 微信每日推送（GitHub Actions）
+
+每个 A 股交易日 **17:00** 自动推送到微信，详见 [docs/wechat-push-setup.md](docs/wechat-push-setup.md)。
+
+---
+
 ## 免责声明
 
 本工具仅供参考，不构成投资建议。股市有风险，投资需谨慎。

@@ -81,11 +81,15 @@ def build_price_chart(
     )
 
     fig.update_layout(
-        height=560,
+        height=480,
+        autosize=True,
         xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        margin=dict(l=40, r=20, t=60, b=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(size=10)),
+        margin=dict(l=36, r=12, t=50, b=24),
         hovermode="x unified",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#FAFBFC",
+        font=dict(family="sans-serif", size=11, color="#1A2332"),
     )
     fig.update_xaxes(type="category", row=2, col=1)
     return fig

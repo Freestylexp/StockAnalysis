@@ -14,6 +14,12 @@ from .market import (
     normalize_code,
 )
 from .models import Holding, Portfolio, WatchItem
+from .portfolio_pnl import (
+    compute_holding_pnl_trend,
+    compute_portfolio_pnl_summary,
+    format_holding_pnl_lines,
+    format_portfolio_pnl_section,
+)
 from .recommend import compute_price_plan, discover_buy_candidates
 from .storage import load_portfolio
 
@@ -187,6 +193,12 @@ def generate_report(portfolio: Portfolio | None = None) -> str:
         f"",
     ]
 
+    pnl_summary = compute_portfolio_pnl_summary(portfolio)
+    pnl_by_code = {t["code"]: t for t in pnl_summary.get("holdings", [])}
+
+    if portfolio.holdings:
+        lines += format_portfolio_pnl_section(pnl_summary)
+
     # --- Holdings ---
     lines += ["## 一、持仓分析", ""]
     if not portfolio.holdings:
@@ -195,6 +207,9 @@ def generate_report(portfolio: Portfolio | None = None) -> str:
     else:
         for h in portfolio.holdings:
             result = analyze_stock(h.code, h.name, holding=True, cost_price=h.cost_price, shares=h.shares)
+            code = normalize_code(h.code)
+            if code in pnl_by_code:
+                result["pnl_trend"] = pnl_by_code[code]
             lines += _format_stock_section(result, is_holding=True)
 
     # --- Watchlist ---
@@ -216,8 +231,11 @@ def generate_report(portfolio: Portfolio | None = None) -> str:
     existing_codes = {normalize_code(h.code) for h in portfolio.holdings}
     existing_codes |= {normalize_code(w.code) for w in portfolio.watchlist}
 
-    candidates = discover_buy_candidates(exclude_codes=existing_codes, limit=max_rec)
+    candidates, scan_meta = discover_buy_candidates(exclude_codes=existing_codes, limit=max_rec)
     rec_count = 0
+    if scan_meta.get("message"):
+        lines.append(f"*{scan_meta['message']}*")
+        lines.append("")
     for cand in candidates:
         result = analyze_stock(cand["code"], cand["name"], holding=False)
         result["reasons"] = list(dict.fromkeys(cand.get("reasons", []) + result.get("reasons", [])))
@@ -273,6 +291,8 @@ def _format_stock_section(result: dict[str, Any], is_holding: bool = False, is_r
         if result.get("pnl_pct") is not None:
             sign = "+" if result["pnl_pct"] >= 0 else ""
             lines.append(f"- **浮动盈亏**: {sign}{result['pnl_pct']:.2f}%（{sign}{result.get('pnl_amount', 0):.2f} 元）")
+        if result.get("pnl_trend"):
+            lines.extend(format_holding_pnl_lines(result["pnl_trend"]))
 
     if ind:
         ma_parts = [f"MA5={ind.get('ma5', 0):.2f}", f"MA20={ind.get('ma20', 0):.2f}"]

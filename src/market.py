@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+from contextlib import contextmanager
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 import akshare as ak
 import pandas as pd
 import requests
+
+PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy")
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Referer": "https://finance.sina.com.cn",
+}
 
 
 def _sina_symbol(code: str) -> str:
@@ -18,16 +27,177 @@ def _sina_symbol(code: str) -> str:
     return f"{prefix}{code}"
 
 
+def _eastmoney_secid(code: str) -> str:
+    code = normalize_code(code)
+    market = "1" if code.startswith(("6", "9")) else "0"
+    return f"{market}.{code}"
+
+
+@contextmanager
+def _without_proxy_env():
+    saved = {k: os.environ.pop(k, None) for k in PROXY_ENV_KEYS if k in os.environ}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is not None:
+                os.environ[key] = value
+
+
+def _detect_system_proxy() -> str | None:
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if proxy:
+        return proxy
+    try:
+        out = subprocess.check_output(["scutil", "--proxy"], text=True, stderr=subprocess.DEVNULL)
+        if "HTTPEnable : 1" not in out:
+            return None
+        host_m = re.search(r"HTTPProxy : ([\d.]+)", out)
+        port_m = re.search(r"HTTPPort : (\d+)", out)
+        if host_m and port_m:
+            return f"http://{host_m.group(1)}:{port_m.group(1)}"
+    except Exception:
+        pass
+    return None
+
+
 def _http_get(url: str, params: dict | None = None, encoding: str = "utf-8") -> requests.Response:
-    session = requests.Session()
-    session.trust_env = False  # 避免本地代理导致连接失败
-    resp = session.get(
-        url, params=params,
-        headers={"Referer": "https://finance.sina.com.cn", "User-Agent": "Mozilla/5.0"},
-        timeout=20,
-    )
-    resp.encoding = encoding
-    return resp
+    """Try direct connection first, then system proxy."""
+    last_error: Exception | None = None
+    for use_proxy in (False, True):
+        session = requests.Session()
+        if use_proxy:
+            proxy = _detect_system_proxy()
+            if not proxy:
+                continue
+            session.proxies = {"http": proxy, "https": proxy}
+        else:
+            session.trust_env = False
+        try:
+            resp = session.get(
+                url,
+                params=params,
+                headers=DEFAULT_HEADERS,
+                timeout=20,
+            )
+            resp.encoding = encoding
+            if resp.status_code == 200 and resp.text.strip():
+                return resp
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise RuntimeError("empty response")
+
+
+def _run_akshare(func: Callable, *args, **kwargs):
+    with _without_proxy_env():
+        return func(*args, **kwargs)
+
+
+def _quote_dict(
+    code: str,
+    name: str,
+    price: float,
+    prev_close: float,
+    *,
+    source: str,
+    open_price: float = 0,
+    high: float = 0,
+    low: float = 0,
+    volume: float = 0,
+    turnover: float = 0,
+    turnover_rate: float | None = None,
+) -> dict[str, Any]:
+    change_amount = price - prev_close if prev_close else 0
+    change_pct = (price / prev_close - 1) * 100 if prev_close else 0
+    return {
+        "code": normalize_code(code),
+        "name": name or code,
+        "price": price,
+        "change_pct": change_pct,
+        "change_amount": change_amount,
+        "volume": volume,
+        "turnover": turnover,
+        "high": high or price,
+        "low": low or price,
+        "open": open_price or price,
+        "prev_close": prev_close or price,
+        "turnover_rate": turnover_rate,
+        "pe": None,
+        "pb": None,
+        "market_cap": None,
+        "source": source,
+    }
+
+
+def _fetch_eastmoney_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for code in codes:
+        try:
+            resp = _http_get(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                params={
+                    "secid": _eastmoney_secid(code),
+                    "fields": "f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170",
+                    "ut": "fa5fd1943c7b388f047f38105475f868",
+                },
+            )
+            payload = resp.json().get("data") or {}
+            price = float(payload.get("f43") or 0) / 100
+            if price <= 0:
+                continue
+            prev_close = float(payload.get("f60") or 0) / 100 or price
+            change_pct = float(payload.get("f170") or 0) / 100
+            result[normalize_code(code)] = _quote_dict(
+                code,
+                str(payload.get("f58") or ""),
+                price,
+                prev_close,
+                source="eastmoney",
+                open_price=float(payload.get("f46") or 0) / 100,
+                high=float(payload.get("f44") or 0) / 100,
+                low=float(payload.get("f45") or 0) / 100,
+                volume=float(payload.get("f47") or 0),
+                turnover=float(payload.get("f48") or 0),
+            )
+            if change_pct:
+                result[normalize_code(code)]["change_pct"] = change_pct
+        except Exception:
+            continue
+    return result
+
+
+def _fetch_tencent_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
+    symbols = [_sina_symbol(c) for c in codes]
+    resp = _http_get(f"http://qt.gtimg.cn/q={','.join(symbols)}", encoding="gbk")
+    result: dict[str, dict[str, Any]] = {}
+    for line in resp.text.strip().split(";"):
+        line = line.strip()
+        if not line or "~" not in line:
+            continue
+        m = re.search(r'v_\w+="(.+)"', line)
+        if not m:
+            continue
+        parts = m.group(1).split("~")
+        if len(parts) < 5:
+            continue
+        code = normalize_code(parts[2])
+        price = float(parts[3] or 0)
+        if price <= 0:
+            continue
+        prev_close = float(parts[4] or 0) or price
+        change_pct = float(parts[32]) if len(parts) > 32 and parts[32] else ((price / prev_close - 1) * 100 if prev_close else 0)
+        result[code] = _quote_dict(
+            code,
+            parts[1],
+            price,
+            prev_close,
+            source="tencent",
+            open_price=float(parts[5] or 0) if len(parts) > 5 else price,
+        )
+        result[code]["change_pct"] = change_pct
+    return result
 
 
 def _fetch_sina_history(code: str, days: int = 120) -> pd.DataFrame:
@@ -61,7 +231,8 @@ def _fetch_sina_history(code: str, days: int = 120) -> pd.DataFrame:
 def _fetch_tencent_history(code: str, days: int = 120) -> pd.DataFrame:
     """Fallback: daily K-line via akshare Tencent source."""
     try:
-        df = ak.stock_zh_a_hist_tx(
+        df = _run_akshare(
+            ak.stock_zh_a_hist_tx,
             symbol=_sina_symbol(code),
             start_date=(datetime.now() - timedelta(days=days + 60)).strftime("%Y%m%d"),
             end_date=datetime.now().strftime("%Y%m%d"),
@@ -110,6 +281,7 @@ def _fetch_sina_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
             "pe": None,
             "pb": None,
             "market_cap": None,
+            "source": "sina",
         }
     return result
 
@@ -124,8 +296,13 @@ def normalize_code(code: str) -> str:
 
 def get_stock_name(code: str) -> str:
     code = normalize_code(code)
+    from .storage import load_stocks_cache
+
+    for item in load_stocks_cache():
+        if item["code"] == code:
+            return item["name"]
     try:
-        df = ak.stock_individual_info_em(symbol=code)
+        df = _run_akshare(ak.stock_individual_info_em, symbol=code)
         row = df[df["item"] == "股票简称"]
         if not row.empty:
             return str(row.iloc[0]["value"])
@@ -134,19 +311,12 @@ def get_stock_name(code: str) -> str:
     return ""
 
 
-def fetch_realtime_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
-    """Fetch realtime quotes for given stock codes."""
-    if not codes:
-        return {}
-
-    normalized = [normalize_code(c) for c in codes]
+def _fetch_akshare_spot_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
-
-    # 1) 东方财富
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = _run_akshare(ak.stock_zh_a_spot_em)
         df["代码"] = df["代码"].astype(str).str.zfill(6)
-        for code in normalized:
+        for code in codes:
             row = df[df["代码"] == code]
             if row.empty:
                 continue
@@ -167,21 +337,67 @@ def fetch_realtime_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
                 "pe": float(r.get("市盈率-动态", 0) or 0) if pd.notna(r.get("市盈率-动态")) else None,
                 "pb": float(r.get("市净率", 0) or 0) if pd.notna(r.get("市净率")) else None,
                 "market_cap": float(r.get("总市值", 0) or 0) if pd.notna(r.get("总市值")) else None,
+                "source": "akshare",
             }
-        if result:
-            return {c: result[c] for c in normalized if c in result}
     except Exception:
         pass
+    return result
 
-    # 2) 新浪财经
-    try:
-        sina = _fetch_sina_quotes(normalized)
-        if sina:
-            return {c: sina[c] for c in normalized if c in sina}
-    except Exception:
-        pass
 
-    return result  # 空 dict，不抛异常
+def _fetch_quotes_from_history(codes: list[str]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for code in codes:
+        code = normalize_code(code)
+        hist = fetch_history(code, days=10)
+        if hist is None or hist.empty:
+            continue
+        close = pd.to_numeric(hist["收盘"], errors="coerce")
+        if close.empty:
+            continue
+        price = float(close.iloc[-1])
+        prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
+        if price <= 0:
+            continue
+        result[code] = _quote_dict(
+            code,
+            get_stock_name(code),
+            price,
+            prev_close,
+            source="history",
+        )
+    return result
+
+
+def fetch_realtime_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """Fetch realtime quotes for given stock codes with multi-source fallbacks."""
+    if not codes:
+        return {}
+
+    normalized = [normalize_code(c) for c in codes]
+    missing = list(normalized)
+    result: dict[str, dict[str, Any]] = {}
+
+    fetchers = (
+        _fetch_tencent_quotes,
+        _fetch_sina_quotes,
+        _fetch_eastmoney_quotes,
+        _fetch_akshare_spot_quotes,
+    )
+    for fetcher in fetchers:
+        if not missing:
+            break
+        try:
+            batch = fetcher(missing)
+            result.update(batch)
+            missing = [c for c in missing if c not in result]
+        except Exception:
+            continue
+
+    if missing:
+        history_quotes = _fetch_quotes_from_history(missing)
+        result.update(history_quotes)
+
+    return {c: result[c] for c in normalized if c in result}
 
 
 def _load_stale_history_cache(code: str, days: int) -> pd.DataFrame:
@@ -210,7 +426,8 @@ def fetch_history(code: str, days: int = 120) -> pd.DataFrame:
     df = pd.DataFrame()
 
     try:
-        df = ak.stock_zh_a_hist(
+        df = _run_akshare(
+            ak.stock_zh_a_hist,
             symbol=code, period="daily",
             start_date=start, end_date=end, adjust="qfq",
         )
@@ -285,7 +502,7 @@ def fetch_stock_list() -> list[dict[str, str]]:
     from .storage import load_stocks_cache, save_stocks_cache
 
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = _run_akshare(ak.stock_zh_a_spot_em)
     except Exception:
         return load_stocks_cache()
 
@@ -347,7 +564,7 @@ def search_stocks(keyword: str, stock_list: list[dict[str, str]] | None = None, 
 def discover_hot_stocks(limit: int = 10) -> list[dict[str, Any]]:
     """Discover trending A-shares by turnover and momentum."""
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = _run_akshare(ak.stock_zh_a_spot_em)
     except Exception:
         return []
 

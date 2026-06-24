@@ -14,7 +14,17 @@ from src.analyze import analyze_stock, generate_report, save_report
 from src.charts import build_price_chart
 from src.market import fetch_realtime_quotes, fetch_stock_list, get_stock_name, normalize_code, search_stocks
 from src.models import Holding, WatchItem
+from src.portfolio_pnl import compute_portfolio_pnl_summary
 from src.recommend import discover_buy_candidates
+from src.ui import (
+    inject_theme,
+    page_header,
+    render_holdings_cards,
+    render_metric_grid,
+    render_watchlist_cards,
+    section_title,
+    sidebar_brand,
+)
 from src.storage import load_portfolio, save_portfolio
 
 st.set_page_config(
@@ -24,21 +34,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.markdown(
-    """
-    <style>
-    .block-container { padding-top: 1.5rem; }
-  .search-hit {
-        padding: 0.4rem 0.6rem;
-        border-radius: 6px;
-        background: #f0f4f8;
-        margin-bottom: 0.25rem;
-        font-size: 0.9rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+inject_theme()
 
 if RUNNING_ON_HF:
     st.info(
@@ -174,10 +170,9 @@ def render_stock_picker(
         return None
 
     st.caption(f"找到 {len(results)} 条，点击选择：")
-    cols = st.columns(3)
-    for i, r in enumerate(results):
-        label_btn = f"{r['name']}\n{r['code']}"
-        if cols[i % 3].button(label_btn, key=f"{key_prefix}_hit_{r['code']}", width="stretch"):
+    for r in results:
+        label_btn = f"{r['name']}  ·  {r['code']}"
+        if st.button(label_btn, key=f"{key_prefix}_hit_{r['code']}", width="stretch"):
             st.session_state[selected_key] = r
             st.session_state[f"{key_prefix}_show_selected"] = True
             st.rerun()
@@ -186,30 +181,34 @@ def render_stock_picker(
 
 
 def page_overview():
-    st.title("📈 A股持仓分析")
-    st.caption("管理持仓、关注股，一键生成每日买卖建议")
-
     portfolio = get_pf()
-    codes = [h.code for h in portfolio.holdings] + [w.code for w in portfolio.watchlist]
+    page_header(
+        "A股持仓分析",
+        "管理持仓、关注股，盈利导向操作建议",
+        badge=f"持仓 {len(portfolio.holdings)} · 关注 {len(portfolio.watchlist)}",
+    )
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("持仓数量", len(portfolio.holdings))
-    col2.metric("关注股", len(portfolio.watchlist))
-    col3.metric("市场", "A股")
+    codes = [h.code for h in portfolio.holdings] + [w.code for w in portfolio.watchlist]
 
     quotes: dict = {}
     if codes:
-        if st.button("🔄 刷新行情", type="primary", key="overview_refresh"):
+        if st.button("🔄 刷新行情", type="primary", key="overview_refresh", width="stretch"):
             st.session_state["do_refresh_quotes"] = True
         if st.session_state.get("do_refresh_quotes"):
             with st.spinner("正在获取实时行情..."):
-                try:
-                    quotes = fetch_realtime_quotes(codes)
+                quotes = fetch_realtime_quotes(codes)
+                if quotes:
                     st.session_state["quotes_cache"] = quotes
                     st.session_state["do_refresh_quotes"] = False
-                except Exception as e:
-                    st.error(f"获取行情失败：{e}")
+                    delayed = [c for c in codes if quotes.get(c, {}).get("source") == "history"]
+                    if delayed:
+                        st.warning("部分股票使用了历史收盘价兜底（实时接口暂不可用）")
+                    else:
+                        st.success(f"已更新 {len(quotes)} 只股票行情")
+                else:
+                    st.error("获取行情失败：请检查网络或代理设置后重试")
                     quotes = st.session_state.get("quotes_cache", {})
+                    st.session_state["do_refresh_quotes"] = False
         else:
             quotes = st.session_state.get("quotes_cache", {})
             if not quotes:
@@ -223,14 +222,26 @@ def page_overview():
         total_value += price * h.shares
         total_cost += h.cost_price * h.shares
 
-    pnl = total_value - total_cost
-    pnl_pct = (pnl / total_cost * 100) if total_cost else 0
-    col4.metric("持仓市值", f"¥{total_value:,.0f}", f"{pnl_pct:+.1f}%")
+    pnl_pct = ((total_value - total_cost) / total_cost * 100) if total_cost else 0
+    render_metric_grid([
+        ("持仓数量", str(len(portfolio.holdings)), None),
+        ("关注股", str(len(portfolio.watchlist)), None),
+        ("市场", "A股", None),
+        ("持仓市值", f"¥{total_value:,.0f}", f"{pnl_pct:+.1f}%" if total_cost else None),
+    ])
 
-    st.divider()
+    c_go1, c_go2 = st.columns(2)
+    with c_go1:
+        if st.button("📄 每日分析报告", type="secondary", key="goto_daily_report", width="stretch"):
+            st.session_state["goto_page"] = "每日分析"
+            st.rerun()
+    with c_go2:
+        if st.button("📈 价格走势", type="secondary", key="goto_charts", width="stretch"):
+            st.session_state["goto_page"] = "价格走势"
+            st.rerun()
 
     if portfolio.holdings:
-        st.subheader("我的持仓")
+        section_title("我的持仓")
         rows = []
         for h in portfolio.holdings:
             q = quotes.get(h.code, {})
@@ -246,9 +257,9 @@ def page_overview():
                 "涨跌幅": f"{q.get('change_pct', 0):+.2f}%" if q else "—",
                 "浮动盈亏": f"¥{pnl_v:+,.0f} ({pnl_p:+.1f}%)" if pnl_v is not None else "—",
             })
-        st.dataframe(rows, width="stretch", hide_index=True)
+        render_holdings_cards(rows)
 
-        st.subheader("持仓操作建议速览")
+        section_title("持仓操作建议速览")
         for h in portfolio.holdings:
             try:
                 r = analyze_stock(h.code, h.name, holding=True, cost_price=h.cost_price, shares=h.shares)
@@ -266,7 +277,7 @@ def page_overview():
         st.info("暂无持仓，请在「持仓管理」中添加")
 
     if portfolio.watchlist:
-        st.subheader("关注股")
+        section_title("关注股")
         rows = []
         for w in portfolio.watchlist:
             q = quotes.get(w.code, {})
@@ -278,7 +289,7 @@ def page_overview():
                 "涨跌幅": f"{q.get('change_pct', 0):+.2f}%" if q else "—",
                 "添加日期": w.added_at,
             })
-        st.dataframe(rows, width="stretch", hide_index=True)
+        render_watchlist_cards(rows)
 
 
 def _render_holding_editor(h: Holding, portfolio) -> None:
@@ -309,7 +320,7 @@ def _render_holding_editor(h: Holding, portfolio) -> None:
 
 
 def page_holdings():
-    st.header("持仓管理")
+    page_header("持仓管理", "搜索添加或编辑现有持仓")
 
     tab_add, tab_list = st.tabs(["➕ 添加持仓", "📋 编辑持仓"])
 
@@ -369,7 +380,7 @@ def page_holdings():
 
 
 def page_watchlist():
-    st.header("关注股管理")
+    page_header("关注股管理", "跟踪潜力标的，等待买入时机")
 
     tab_add, tab_list = st.tabs(["➕ 添加关注", "📋 管理关注"])
 
@@ -416,8 +427,7 @@ def page_watchlist():
 
 
 def page_search():
-    st.header("🔍 搜索股票")
-    st.caption("输入名称或代码，支持模糊联想")
+    page_header("搜索股票", "输入名称或代码，支持模糊联想")
 
     picked = render_stock_picker("global_search", placeholder="如 宁德、白酒、000001")
     if not picked:
@@ -427,11 +437,11 @@ def page_search():
     st.divider()
 
     col1, col2, col3 = st.columns(3)
-    if col1.button("➕ 添加为持仓", type="primary", key="search_to_hold"):
+    if col1.button("➕ 添加为持仓", type="primary", key="search_to_hold", width="stretch"):
         st.session_state["hold_add_selected"] = picked
         st.session_state["goto_page"] = "持仓管理"
         st.rerun()
-    if col2.button("👁 添加为关注", key="search_to_watch"):
+    if col2.button("👁 添加为关注", key="search_to_watch", width="stretch"):
         portfolio = get_pf()
         if not any(w.code == code for w in portfolio.watchlist):
             portfolio.watchlist.append(WatchItem(code=code, name=name, added_at=datetime.now().strftime("%Y-%m-%d")))
@@ -443,22 +453,76 @@ def page_search():
         st.rerun()
 
     with st.spinner("获取行情..."):
+        quotes = fetch_realtime_quotes([code])
+        q = quotes.get(normalize_code(code), {})
+        if q:
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("最新价", f"¥{q.get('price', 0):.3f}")
+            m2.metric("涨跌幅", f"{q.get('change_pct', 0):+.2f}%")
+            m3.metric("今开", f"¥{q.get('open', 0):.3f}")
+            m4.metric("昨收", f"¥{q.get('prev_close', 0):.3f}")
+            if q.get("source") == "history":
+                st.caption("当前为历史收盘价兜底，非实时行情")
+        else:
+            st.warning("行情获取失败：请检查网络，或在总览页点击「刷新行情」重试")
+
+
+def render_portfolio_pnl_summary(portfolio) -> None:
+    """Show portfolio P&L and recent-day changes on daily analysis page."""
+    if not portfolio.holdings:
+        return
+
+    with st.spinner("计算近日盈亏变化..."):
         try:
-            quotes = fetch_realtime_quotes([code])
-            q = quotes.get(code, {})
-            if q:
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("最新价", f"¥{q.get('price', 0):.3f}")
-                m2.metric("涨跌幅", f"{q.get('change_pct', 0):+.2f}%")
-                m3.metric("今开", f"¥{q.get('open', 0):.3f}")
-                m4.metric("昨收", f"¥{q.get('prev_close', 0):.3f}")
+            summary = compute_portfolio_pnl_summary(portfolio)
         except Exception as e:
-            st.warning(f"行情获取失败：{e}")
+            st.warning(f"盈亏统计失败：{e}")
+            return
+
+    st.subheader("📊 持仓盈亏概览")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("组合市值", f"¥{summary['total_market_value']:,.0f}")
+    c2.metric("总浮动盈亏", f"¥{summary['total_pnl']:,.0f}", f"{summary['total_pnl_pct']:+.2f}%")
+
+    ch1 = summary.get("changes", {}).get(1, {})
+    ch3 = summary.get("changes", {}).get(3, {})
+    ch5 = summary.get("changes", {}).get(5, {})
+    c3.metric("近 1 日变化", f"¥{ch1.get('pnl_delta', 0):+,.0f}")
+    c4.metric("近 5 日变化", f"¥{ch5.get('pnl_delta', 0):+,.0f}")
+
+    sub1, sub2 = st.columns(2)
+    with sub1:
+        if summary.get("daily"):
+            st.markdown("**近 5 日组合浮动盈亏**")
+            daily_rows = [
+                {
+                    "日期": r["date"],
+                    "浮动盈亏": f"¥{r['pnl']:,.0f}",
+                    "较前日": f"¥{r['pnl_delta']:+,.0f}",
+                }
+                for r in summary["daily"]
+            ]
+            st.dataframe(daily_rows, hide_index=True, width="stretch")
+
+    with sub2:
+        st.markdown("**个股近日盈亏变化（元）**")
+        stock_rows = []
+        for t in summary.get("holdings", []):
+            stock_rows.append({
+                "股票": t["name"],
+                "总盈亏": f"¥{t['current_pnl']:,.0f}",
+                "近1日": f"¥{t['changes'].get(1, {}).get('pnl_delta', 0):+,.0f}",
+                "近3日": f"¥{t['changes'].get(3, {}).get('pnl_delta', 0):+,.0f}",
+                "近5日": f"¥{t['changes'].get(5, {}).get('pnl_delta', 0):+,.0f}",
+            })
+        st.dataframe(stock_rows, hide_index=True, width="stretch")
+
+    st.caption(f"近 3 日组合盈亏变化：¥{ch3.get('pnl_delta', 0):+,.0f}")
+    st.divider()
 
 
 def page_analysis():
-    st.header("每日分析报告")
-    st.caption("含持仓明细价位建议、全市场买入推荐（趋势/超卖反弹/均线支撑）")
+    page_header("每日分析报告", "持仓价位建议 · 全市场买入推荐")
 
     portfolio = get_pf()
     tab_report, tab_rec = st.tabs(["📄 完整报告", "⭐ 今日买入推荐"])
@@ -469,13 +533,24 @@ def page_analysis():
         exclude |= {normalize_code(w.code) for w in portfolio.watchlist}
 
         if st.button("🔍 扫描市场", type="primary", key="scan_market"):
-            with st.spinner("正在扫描市场（约 1–3 分钟）..."):
+            with st.spinner("正在扫描市场（约 30 秒–2 分钟）..."):
                 try:
-                    st.session_state["buy_candidates"] = discover_buy_candidates(
-                        exclude_codes=exclude, limit=portfolio.settings.get("max_new_recommendations", 5)
+                    candidates, scan_meta = discover_buy_candidates(
+                        exclude_codes=exclude,
+                        limit=portfolio.settings.get("max_new_recommendations", 5),
                     )
+                    st.session_state["buy_candidates"] = candidates
+                    st.session_state["buy_scan_meta"] = scan_meta
+                    if candidates:
+                        st.success(scan_meta.get("message") or f"找到 {len(candidates)} 个推荐标的")
+                    else:
+                        st.warning(scan_meta.get("message") or "暂无符合条件的买入推荐")
                 except Exception as e:
                     st.error(f"扫描失败：{e}")
+
+        scan_meta = st.session_state.get("buy_scan_meta", {})
+        if scan_meta.get("message") and st.session_state.get("buy_candidates"):
+            st.caption(scan_meta["message"])
 
         for cand in st.session_state.get("buy_candidates", []):
             with st.expander(f"⭐ {cand['name']}（{cand['code']}）— 评分 {cand['score']}", expanded=True):
@@ -490,7 +565,7 @@ def page_analysis():
                     st.warning(str(e))
 
         if not st.session_state.get("buy_candidates"):
-            st.info("点击「扫描市场」获取今日买入推荐")
+            st.info("点击「🔍 扫描市场」获取今日买入推荐（会扫描全市场或备选股票池）")
 
     with tab_report:
         if not portfolio.holdings and not portfolio.watchlist:
@@ -508,6 +583,9 @@ def page_analysis():
                     st.error(f"分析失败：{e}")
                     return
 
+        if portfolio.holdings:
+            render_portfolio_pnl_summary(portfolio)
+
         if "last_report" in st.session_state:
             st.success(f"报告已保存：{st.session_state.get('report_path', '')}")
             st.markdown(st.session_state["last_report"])
@@ -520,7 +598,7 @@ def page_analysis():
 
 
 def page_quick():
-    st.header("个股速查")
+    page_header("个股速查", "输入代码即时分析，支持持仓视角")
 
     portfolio = get_pf()
     default_code = st.session_state.pop("quick_code", "")
@@ -569,8 +647,7 @@ def page_quick():
 
 
 def page_charts():
-    st.header("📉 持仓价格走势")
-    st.caption("K 线 + 均线 + 成本线 + 加仓/减仓/止损参考线")
+    page_header("价格走势", "K 线 · 均线 · 成本线 · 盈利目标")
 
     portfolio = get_pf()
     days = st.slider("显示天数", 30, 250, 120, step=10, key="chart_days")
@@ -643,7 +720,7 @@ def _render_single_chart(code: str, name: str, cost: float, shares: float, days:
 PAGE_NAMES = ["总览", "价格走势", "搜索股票", "持仓管理", "关注股", "每日分析", "个股速查"]
 
 with st.sidebar:
-    st.title("导航")
+    sidebar_brand()
     default_page = st.session_state.pop("goto_page", "总览")
     default_idx = PAGE_NAMES.index(default_page) if default_page in PAGE_NAMES else 0
     page = st.radio("选择页面", PAGE_NAMES, index=default_idx, label_visibility="collapsed")

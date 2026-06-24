@@ -7,3 +7,4 @@ venv/
 reports/*.md
 !reports/.gitkeep
 data/history_cache/
+.deploy_key.pub
