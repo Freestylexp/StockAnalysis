@@ -1,5 +1,5 @@
 #!/bin/bash
-# 推送代码到 GitHub，供 Actions 定时微信推送使用
+# 推送代码到 GitHub，供 Actions 定时邮件推送使用
 set -e
 cd "$(dirname "$0")/.."
 
@@ -49,11 +49,19 @@ git push git@github.com:Freestylexp/StockAnalysis.git main
 
 echo ""
 echo "✅ GitHub 推送成功！"
-echo "下一步: 配置 GitHub Secrets（自动邮件必做）"
-echo "  SMTP_USER      = 你的 QQ 邮箱"
-echo "  SMTP_PASSWORD  = QQ 邮箱 16 位授权码"
-echo "  EMAIL_TO       = 收件邮箱（可选）"
-echo "https://github.com/Freestylexp/StockAnalysis/settings/secrets/actions"
 echo ""
-echo "配置完成后: Actions → Daily Email Report → Run workflow 测试"
+echo "下一步: 配置 GitHub Secrets（云端自动邮件，必做）"
+echo "  打开: https://github.com/Freestylexp/StockAnalysis/settings/secrets/actions"
+echo ""
+echo "  【GitHub Actions 用 Resend API，不要用 QQ SMTP】"
+echo "  RESEND_API_KEY = Resend 的 re_... 密钥  （https://resend.com → API Keys）"
+echo "  EMAIL_TO       = 收件 QQ 邮箱（须与 Resend 注册邮箱一致）"
+echo "  RESEND_FROM    = 可选，默认 onboarding@resend.dev"
+echo "  APP_URL        = 可选，Hugging Face 链接"
+echo ""
+echo "  本地测试仍可用 QQ SMTP："
+echo "    export SMTP_USER='...' SMTP_PASSWORD='...' && ./scripts/test-email-push.sh"
+echo ""
+echo "配置完成后: Actions → Daily Email Report → Run workflow"
+echo "成功日志应显示: → 方式：resend"
 echo ""
