@@ -4,77 +4,108 @@
 
 > **无需电脑开机**：任务在 GitHub 云端运行，你的 Mac 关机也能收到邮件。
 
-## 一、准备 QQ 邮箱授权码（推荐）
+---
 
-1. 登录 [mail.qq.com](https://mail.qq.com)
-2. **设置 → 账户**
-3. 找到 **POP3/IMAP/SMTP/Exchange/CardDAV/CalDAV服务**
-4. 开启 **POP3/SMTP 服务** 或 **IMAP/SMTP 服务**
-5. 按提示发短信，获得 **16 位授权码**（不是 QQ 登录密码）
+## 重要：为什么 GitHub 上 QQ SMTP 会失败？
 
-默认 SMTP：
+本地 `./scripts/test-email-push.sh` 用 QQ SMTP 可以成功，但 **GitHub Actions 云端通常无法直连 `smtp.qq.com:465/587`**，会出现：
 
-| 项目 | 值 |
-|------|-----|
-| SMTP_HOST | `smtp.qq.com` |
-| SMTP_PORT | `465` |
+```
+SMTPServerDisconnected: please run connect() first
+```
 
-Gmail 用户：`SMTP_HOST=smtp.gmail.com`，`SMTP_PORT=587`，需应用专用密码。
+这是云端网络对 SMTP 端口的限制，**不是授权码配错**。
 
-## 二、配置 GitHub Secrets（自动推送必做）
+**解决方案：** GitHub 自动推送请用 **Resend API（HTTPS）**；本地测试仍可用 QQ SMTP。
 
-打开仓库：**Settings → Secrets and variables → Actions → New repository secret**
+---
+
+## 方案 A：Resend API（GitHub 自动推送，推荐）
+
+### 1. 注册 Resend
+
+1. 打开 https://resend.com 注册（建议用你要收报告的邮箱，如 QQ 邮箱）
+2. 进入 **API Keys** → **Create API Key** → 复制 `re_...` 开头的密钥
+
+免费版说明：
+
+- 默认发件地址：`onboarding@resend.dev`
+- 未绑定域名时，**只能发到 Resend 注册时用的那个邮箱**
+- 每月约 3000 封，足够每日报告
+
+### 2. 配置 GitHub Secrets
+
+仓库 → **Settings → Secrets and variables → Actions**
 
 | Secret | 必填 | 说明 |
 |--------|------|------|
-| `SMTP_USER` | ✅ | 发件 QQ 邮箱，如 `your@qq.com` |
-| `SMTP_PASSWORD` | ✅ | QQ 邮箱 **16 位授权码**（不是登录密码） |
-| `EMAIL_TO` | 建议填 | 收件邮箱；不填则发到 `SMTP_USER` |
-| `SMTP_HOST` | 可选 | 默认 `smtp.qq.com` |
-| `SMTP_PORT` | 可选 | 默认 `465` |
+| `RESEND_API_KEY` | ✅ | Resend 的 `re_...` API Key |
+| `EMAIL_TO` | ✅ | 收件邮箱（须与 Resend 注册邮箱一致，除非已绑域名） |
+| `RESEND_FROM` | 可选 | 默认 `onboarding@resend.dev` |
 | `APP_URL` | 可选 | Hugging Face 网页链接 |
 
-**本地测试能发邮件 ≠ 云端能发**：本地用的是终端里的环境变量；GitHub Actions 只读 Secrets，两者需分别配置。
-
-### 确认 Actions 已开启
-
-仓库 **Settings → Actions → General** → 选择 **Allow all actions**（或至少允许本仓库 workflow）。
-
-### 确认定时任务在跑
-
-**Actions** 标签页应能看到 **Daily Email Report**。若长期无运行记录，检查：
-
-1. 上述 Secrets 是否都已保存（名称大小写必须一致）
-2. 默认分支是否为 `main`，且 workflow 文件已在该分支
-3. 私有仓库长期无活动，GitHub 可能暂停 schedule（手动 Run workflow 一次可恢复）
-
-## 三、推送代码并测试
+### 3. 推送代码并测试
 
 ```bash
 cd ~/Projects/stock-portfolio-agent
 ./scripts/setup-github-push.sh
 ```
 
-1. GitHub → **Actions** → **Daily Email Report** → **Run workflow**（立即测试）
-2. 查看本次运行日志，应出现 `邮件发送成功`
-3. 检查邮箱（含垃圾箱）
+GitHub → **Actions** → **Daily Email Report** → **Run workflow**
 
-定时规则：**周一至周五 12:00 北京时间**（UTC 04:00），GitHub 可能晚几分钟触发。
+成功日志示例：
 
-## 四、本地测试
+```
+→ 方式：resend
+→ 发件：onboarding@resend.dev  收件：your@qq.com
+✅ 邮件发送成功
+```
+
+---
+
+## 方案 B：QQ SMTP（仅适合本地）
+
+本地终端：
 
 ```bash
 export SMTP_USER='your@qq.com'
-export SMTP_PASSWORD='你的授权码'
-export EMAIL_TO='your@qq.com'   # 可选
+export SMTP_PASSWORD='你的16位授权码'
+export EMAIL_TO='your@qq.com'
 ./scripts/test-email-push.sh
 ```
 
-## 五、邮件内容
+QQ 授权码：QQ 邮箱 → 设置 → 账户 → 开启 POP3/SMTP → 生成授权码。
 
-- 正文：HTML 摘要（组合盈亏、持仓建议、买入参考）
+**不要把 SMTP 当作 GitHub 自动推送方案**，云端大概率连不上。
+
+---
+
+## 定时规则
+
+`.github/workflows/daily-report-email.yml`：
+
+```yaml
+cron: "0 4 * * 1-5"   # UTC 04:00 = 北京时间 12:00，周一至周五
+```
+
+GitHub 可能延迟 0–15 分钟触发。
+
+---
+
+## 邮件内容
+
+- 正文：HTML 摘要（组合盈亏、持仓建议、**关注股动向**、买入参考）
 - 附件：完整 Markdown 报告（生成成功时）
 
-## 六、微信收邮件提醒
-
 QQ 邮箱可绑定微信，新邮件会推送到微信。
+
+---
+
+## 故障排查
+
+| 现象 | 处理 |
+|------|------|
+| `please run connect() first` | 改用 **RESEND_API_KEY**，不要用 SMTP |
+| `Resend API 失败 (403)` | `EMAIL_TO` 须是 Resend 注册邮箱，或绑定发信域名 |
+| `invalid literal for int()` | 删除空的 `SMTP_PORT` Secret（云端已不需要 SMTP） |
+| 本地能发、Actions 不能发 | 正常；本地 SMTP / 云端 Resend 两套配置 |

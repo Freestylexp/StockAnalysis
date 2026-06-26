@@ -124,10 +124,12 @@ def build_digest_html() -> tuple[str, str]:
 
 
 def main() -> int:
-    print("→ 检查 SMTP 配置 ...")
-    from src.email_notify import get_smtp_config
+    print("→ 检查邮件配置 ...")
+    from src.email_notify import get_email_config
 
-    cfg = get_smtp_config()
+    cfg = get_email_config()
+    transport = cfg.get("transport", "smtp")
+    print(f"→ 方式：{transport}")
     print(f"→ 发件：{cfg['from']}  收件：{cfg['to']}  服务器：{cfg['host']}:{cfg['port']}")
 
     print("→ 生成每日报告 ...")

@@ -3,13 +3,23 @@
 set -e
 cd "$(dirname "$0")/.."
 
-if [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASSWORD" ]; then
-  echo "请先设置邮箱 SMTP："
+if [ -n "$RESEND_API_KEY" ]; then
+  :
+elif [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASSWORD" ]; then
+  :
+else
+  echo "请先设置邮件配置（二选一）："
+  echo ""
+  echo "【GitHub 云端推荐】Resend API："
+  echo "  export RESEND_API_KEY='re_...'"
+  echo "  export EMAIL_TO='your@qq.com'"
+  echo ""
+  echo "【本地测试】QQ SMTP："
   echo "  export SMTP_USER='your@qq.com'"
   echo "  export SMTP_PASSWORD='你的授权码'"
-  echo "  export EMAIL_TO='收件邮箱（可选，默认同 SMTP_USER）'"
+  echo "  export EMAIL_TO='your@qq.com'"
   echo ""
-  echo "QQ 邮箱授权码获取：QQ 邮箱 → 设置 → 账户 → POP3/SMTP → 开启服务"
+  echo "详见 docs/email-push-setup.md"
   exit 1
 fi
 

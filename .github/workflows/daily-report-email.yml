@@ -26,33 +26,28 @@ jobs:
 
       - name: Validate email secrets
         env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
-          if [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASSWORD" ]; then
-            echo "::error::请配置 SMTP_USER 和 SMTP_PASSWORD（QQ 邮箱授权码）"
+          if [ -n "$RESEND_API_KEY" ]; then
+            echo "使用 Resend API（HTTPS，适合 GitHub 云端自动推送）"
+            if [ -z "$EMAIL_TO" ]; then
+              echo "::error::使用 RESEND_API_KEY 时必须配置 EMAIL_TO（收件邮箱）"
+              exit 1
+            fi
+          elif [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASSWORD" ]; then
+            echo "::warning::仅配置了 SMTP。GitHub Actions 通常无法直连 QQ SMTP，请改用 RESEND_API_KEY。"
+          else
+            echo "::error::请配置 RESEND_API_KEY + EMAIL_TO（推荐），或 SMTP_USER + SMTP_PASSWORD（仅适合本地）"
             exit 1
           fi
-          echo "SMTP_USER 已配置（${SMTP_USER:0:3}***）"
-          if [ -n "$EMAIL_TO" ]; then
-            echo "EMAIL_TO 已配置（${EMAIL_TO:0:3}***）"
-          else
-            echo "EMAIL_TO 未配置，将发到 SMTP_USER"
-          fi
-
-      - name: Test SMTP only
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: python -u scripts/test_smtp.py
 
       - name: Generate and email daily report
         env:
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM: ${{ secrets.RESEND_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           APP_URL: ${{ secrets.APP_URL }}
           TZ: Asia/Shanghai
