@@ -133,11 +133,17 @@ def main() -> int:
     print(f"→ 发件：{cfg['from']}  收件：{cfg['to']}  服务器：{cfg['host']}:{cfg['port']}")
 
     print("→ 生成每日报告 ...")
+    portfolio = load_portfolio()
+    for h in portfolio.holdings:
+        print(f"   持仓：{h.name}（{h.code}） {h.shares:g} 股 @ ¥{h.cost_price}")
+    for w in portfolio.watchlist:
+        print(f"   关注：{w.name}（{w.code}）")
+
     title, digest_html = build_digest_html()
 
     full_report = ""
     try:
-        full_report = generate_report(load_portfolio())
+        full_report = generate_report(portfolio)
         report_path = save_report(full_report, ROOT / "reports")
         print(f"→ 完整报告已保存：{report_path}")
     except Exception as exc:
