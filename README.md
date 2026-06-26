@@ -111,7 +111,15 @@ python main.py analyze --save
 
 ## 邮件每日推送（GitHub Actions）
 
-每个 A 股交易日 **17:00** 自动发到邮箱，详见 [docs/email-push-setup.md](docs/email-push-setup.md)。
+每个 A 股交易日 **12:00 左右** 自动发到邮箱（GitHub 云端执行，电脑关机也会推送），详见 [docs/email-push-setup.md](docs/email-push-setup.md)。
+
+## AI 初学者完整教材
+
+从零搭建、录入持仓、网页版、Hugging Face 部署、GitHub 邮件推送的**分步教程 + 最优提示词**，见：
+
+**[docs/ai-beginner-tutorial.md](docs/ai-beginner-tutorial.md)**
+
+适合分享给朋友或作为 Cursor 入门案例。
 
 ---
 

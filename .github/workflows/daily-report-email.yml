@@ -2,8 +2,8 @@ name: Daily Email Report
 
 on:
   schedule:
-    # 北京时间 Mon-Fri 17:00（UTC 09:00）
-    - cron: "0 9 * * 1-5"
+    # 北京时间 Mon-Fri 12:00（UTC 04:00）；GitHub 可能延迟 0–15 分钟
+    - cron: "0 4 * * 1-5"
   workflow_dispatch:
 
 jobs:

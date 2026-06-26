@@ -49,6 +49,11 @@ git push git@github.com:Freestylexp/StockAnalysis.git main
 
 echo ""
 echo "✅ GitHub 推送成功！"
-echo "下一步: 配置 GitHub Secret → PUSHPLUS_TOKEN"
+echo "下一步: 配置 GitHub Secrets（自动邮件必做）"
+echo "  SMTP_USER      = 你的 QQ 邮箱"
+echo "  SMTP_PASSWORD  = QQ 邮箱 16 位授权码"
+echo "  EMAIL_TO       = 收件邮箱（可选）"
 echo "https://github.com/Freestylexp/StockAnalysis/settings/secrets/actions"
+echo ""
+echo "配置完成后: Actions → Daily Email Report → Run workflow 测试"
 echo ""
