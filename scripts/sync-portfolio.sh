@@ -45,7 +45,10 @@ git push git@github.com:Freestylexp/StockAnalysis.git main
 echo ""
 echo "✅ 持仓已同步到 GitHub"
 echo "   验证: https://github.com/Freestylexp/StockAnalysis/blob/main/data/portfolio.json"
-echo "   然后 Actions → Daily Email Report → Run workflow"
+echo ""
+echo "   若已配置 HF_TOKEN，GitHub Actions 会自动同步到 Hugging Face（约 2–5 分钟）"
+echo "   https://huggingface.co/spaces/Freestylexp/stock-portfolio-agent"
+echo "   邮件测试: Actions → Daily Email Report → Run workflow"
 echo ""
 python3 -c "
 import json
