@@ -34,6 +34,25 @@ def _is_github_actions() -> bool:
 def get_email_config() -> dict[str, str | int]:
     """Return normalized email settings for logging and sending."""
     resend_key = _env("RESEND_API_KEY")
+
+    if _is_github_actions():
+        if not resend_key:
+            raise RuntimeError(
+                "GitHub Actions 必须使用 Resend API，不能使用 QQ SMTP。"
+                "请在 Secrets 中添加 RESEND_API_KEY 和 EMAIL_TO，"
+                "并推送最新代码（./scripts/setup-github-push.sh）。"
+            )
+        to_addr = _require("EMAIL_TO", _env("EMAIL_TO"))
+        from_addr = _env("RESEND_FROM", "onboarding@resend.dev") or "onboarding@resend.dev"
+        return {
+            "transport": "resend",
+            "resend_api_key": resend_key,
+            "from": from_addr,
+            "to": to_addr,
+            "host": "api.resend.com",
+            "port": 443,
+        }
+
     if resend_key:
         to_addr = _require("EMAIL_TO", _env("EMAIL_TO"))
         from_addr = _env("RESEND_FROM", "onboarding@resend.dev") or "onboarding@resend.dev"

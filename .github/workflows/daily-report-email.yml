@@ -28,21 +28,17 @@ jobs:
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
-          if [ -n "$RESEND_API_KEY" ]; then
-            echo "使用 Resend API（HTTPS，适合 GitHub 云端自动推送）"
-            if [ -z "$EMAIL_TO" ]; then
-              echo "::error::使用 RESEND_API_KEY 时必须配置 EMAIL_TO（收件邮箱）"
-              exit 1
-            fi
-          elif [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASSWORD" ]; then
-            echo "::warning::仅配置了 SMTP。GitHub Actions 通常无法直连 QQ SMTP，请改用 RESEND_API_KEY。"
-          else
-            echo "::error::请配置 RESEND_API_KEY + EMAIL_TO（推荐），或 SMTP_USER + SMTP_PASSWORD（仅适合本地）"
+          if [ -z "$RESEND_API_KEY" ]; then
+            echo "::error::GitHub 云端必须配置 RESEND_API_KEY（不能用 QQ SMTP）。"
+            echo "注册 https://resend.com → API Keys → 复制 re_... → 添加到 Secrets"
             exit 1
           fi
+          if [ -z "$EMAIL_TO" ]; then
+            echo "::error::请配置 EMAIL_TO（收件邮箱，须与 Resend 注册邮箱一致）"
+            exit 1
+          fi
+          echo "✅ 将使用 Resend API 发信（非 SMTP）"
 
       - name: Generate and email daily report
         env:
