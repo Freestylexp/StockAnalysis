@@ -28,12 +28,28 @@ jobs:
         env:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: |
           if [ -z "$SMTP_USER" ] || [ -z "$SMTP_PASSWORD" ]; then
             echo "::error::请配置 SMTP_USER 和 SMTP_PASSWORD（QQ 邮箱授权码）"
             exit 1
           fi
-          echo "SMTP 配置已就绪"
+          echo "SMTP_USER 已配置（${SMTP_USER:0:3}***）"
+          if [ -n "$EMAIL_TO" ]; then
+            echo "EMAIL_TO 已配置（${EMAIL_TO:0:3}***）"
+          else
+            echo "EMAIL_TO 未配置，将发到 SMTP_USER"
+          fi
+
+      - name: Test SMTP only
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: python -u scripts/test_smtp.py
 
       - name: Generate and email daily report
         env:
