@@ -2,8 +2,9 @@ name: Daily Email Report
 
 on:
   schedule:
-    # 北京时间 Mon-Fri 12:00（UTC 04:00）；GitHub 可能延迟 0–15 分钟
-    - cron: "0 4 * * 1-5"
+    # GitHub 只用 UTC！北京时间中午 12:00 = UTC 04:00（不是 cron 里的 12）
+    # 错误示例：cron "0 16" → 北京时间 凌晨 00:00；cron "0 12" → 北京时间 晚上 20:00
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 jobs:
@@ -23,6 +24,14 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Show trigger time (Beijing)
+        run: |
+          echo "GitHub cron 按 UTC 触发；本任务设定 UTC 04:00 = 北京时间 12:00（中午）"
+          echo -n "当前北京时间: "
+          TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S %Z'
+          echo -n "当前 UTC 时间: "
+          date -u '+%Y-%m-%d %H:%M:%S UTC'
 
       - name: Validate email secrets
         env:
